@@ -1,0 +1,276 @@
+#!/usr/bin/env python
+"""GUI for setting up and creating the gozbruh configuration directory and files """
+
+import os
+import sys
+
+from gozbruh import zbrush_tools as zbrush_tools
+import Tkinter
+import tkMessageBox
+import gozbruh.utils as utils
+import time
+
+class FileSelector(Tkinter.Toplevel):
+    """Tkinter.Toplevel class that allows the user to select ZBrush
+    installation directories from a list of files.
+    """
+
+    def __init__(self, file_list):
+        Tkinter.Toplevel.__init__(self)
+        self.minsize(400, 300)
+
+        self.file_list = file_list
+        self.build()
+
+    def get_selection(self):
+        """Gets a list of str for the currently selected items in the list_box
+        """
+        sel_tup = self.list_box.curselection()
+        sel_list = set()
+        for index in sel_tup:
+            sel_list.add(self.list_box.get(index, index))
+        return sel_list
+
+    def build(self):
+        """Builds the window and listbox inside
+        """
+
+        Tkinter.Label(self,
+                      text='Multiple ZBrush Install Directories Found...\n'
+                           'Please Choose the ones in which you\'d like to'
+                           ' install gozbruh').pack()
+
+        self.list_box = Tkinter.Listbox(self,
+                                        selectmode=Tkinter.MULTIPLE,
+                                        height='15',
+                                        width='80')
+        for item in self.file_list:
+            self.list_box.insert(Tkinter.END, item)
+        self.list_box.pack()
+
+        btn_frame = Tkinter.Frame(self)
+        btn_frame.pack()
+
+        self.accept_btn = Tkinter.Button(btn_frame)
+        self.accept_btn['text'] = 'Ok'
+        self.accept_btn['command'] = lambda: self.event_generate('<<WriteFiles>>')
+        self.accept_btn.pack(side='left')
+
+        self.cancel_btn = Tkinter.Button(btn_frame)
+        self.cancel_btn['text'] = 'Cancel'
+        self.cancel_btn['command'] = self.destroy
+        self.cancel_btn.pack(side='left')
+
+class ConfigUI(object):
+    """Class to handle the end-user configuration of the gozbruh Cross-Platform
+    application.
+    """
+
+    def __init__(self):
+        self.maya_host, self.maya_port = utils.get_net_info(utils.MAYA_ENV)
+        self.zbrush_host, self.zbrush_port = utils.get_net_info(utils.ZBRUSH_ENV)
+        self.shared_dir = utils.get_shared_dir()
+
+        self.maya_host_ui = None
+        self.maya_port_ui = None
+        self.maya_status_ui = None
+
+        self.shared_dir_ui = None
+
+        self.zbrush_host_ui = None
+        self.zbrush_port_ui = None
+        self.zbrush_status_ui = None
+        self.win = None
+
+        self.fs = None
+
+        self.build()
+        self.check_servers()
+
+        self.win.mainloop()
+
+    def update_data(self):
+        """Gets all of the new user-entered data if anything has changed.
+        """
+        self.maya_host = self.maya_host_ui.get()
+        self.maya_port = self.maya_port_ui.get()
+
+        self.zbrush_host = self.zbrush_host_ui.get()
+        self.zbrush_port = self.zbrush_port_ui.get()
+
+        self.shared_dir = self.shared_dir_ui.get()
+
+    def check_servers(self):
+        """Update the server status and check to see if they are up and running
+        """
+
+        # Get new host information from the boxes
+        self.update_data()
+
+        # Check server status based on what servers we're looking at
+        if utils.validate_connection(self.zbrush_host, self.zbrush_port):
+            self.zbrush_status_ui.config(
+                text=('ZBrush Serv Status: connected %s:%s ' %
+                      (self.zbrush_host, self.zbrush_port)),
+                background='green')
+        else:
+            self.zbrush_status_ui.config(
+                text='ZBrush Serv Status: down',
+                background='red')
+
+        if utils.validate_connection(self.maya_host, self.maya_port):
+            self.maya_status_ui.config(
+                text=('Maya Serv Status: connected %s:%s ' %
+                      (self.maya_host, self.maya_port)),
+                background='green')
+        else:
+            self.maya_status_ui.config(
+                text='Maya Serv Status: down',
+                background='red')
+
+    def serv_stop(self):
+        """Stops ZBrushServer
+        """
+        utils.force_zbrush_server_close(host=self.zbrush_host,
+                                        port=self.zbrush_port)
+        while utils.validate_connection(self.zbrush_host, self.zbrush_port):
+            time.sleep(.1)
+
+        self.check_servers()
+
+    def set_env_vars(self):
+        """Set all of the appropriate env vars in prep for writing config files
+        """
+        # For each server/host entry, write the appropriate config file
+        write_data = {utils.MAYA_ENV: '%s:%s' % (self.maya_host, self.maya_port),
+                      utils.ZBRUSH_ENV: '%s:%s' % (self.zbrush_host, self.zbrush_port),
+                      utils.SHARED_DIR_ENV: self.shared_dir}
+        for env_var_key in write_data:
+            os.environ[env_var_key] = write_data[env_var_key]
+
+    def write_config_setup(self):
+        """Takes the new user input and sets up everything necessary for the
+        writing process
+        """
+        # Update data for all of the new field entries
+        self.update_data()
+
+        # Set all of the environment variables so that they are written
+        self.set_env_vars()
+
+        # Write the CONFIG_PATH dirs/files if that already hasn't been done.
+        #     on the current machine.
+        utils.create_config_path()
+
+        if sys.platform == 'darwin':
+            # Get locations that ZBrush is installed for possibility of multiple
+            #     writings of the DefaultZScript.txt
+            zbrush_dirs = utils.get_zbrush_app_dirs()
+
+            if zbrush_dirs is not None and len(zbrush_dirs) > 1:
+                # If there are multiple locations, provide the user with a chance to
+                #     select which zbrush applications the DefaultZScript.txt should
+                #     be installed for
+                self.fs = FileSelector(zbrush_dirs)
+                self.fs.bind('<<WriteFiles>>', self.write_files)
+                return
+            else:
+                self.set_env_vars()
+                utils.install_goz(zbrush_dirs)
+                tkMessageBox.showinfo('gozbruh Success:', 'Write Complete!')
+                return
+        tkMessageBox.showinfo('gozbruh Success:', 'Write Complete!')
+
+    def write_files(self, offending_event):
+        """Writes the DefaultZScirpt and other necessary files for each
+        ZBrush application install directory in the set
+        """
+
+        app_dirs = self.fs.get_selection()
+
+        # For each directory selected, create the DefaultZScript
+        for dir in app_dirs:
+            self.set_env_vars()
+            utils.install_goz(dir)
+        tkMessageBox.showinfo('gozbruh Success:', 'Write Complete!')
+
+    def build(self):
+        """Creates Tkinter UI
+        """
+        self.win = Tkinter.Tk()
+        self.win.title('gozbruh Config GUI')
+        self.win.minsize(475, 500)
+
+        gen_cfg = Tkinter.LabelFrame(self.win, text="General Config")
+        gen_cfg.pack(pady=15, fill="both", expand="yes")
+
+        Tkinter.Label(gen_cfg, text='Shared Dir:').pack(pady=5, padx=5)
+        self.shared_dir_ui = Tkinter.Entry(gen_cfg, width=30)
+        self.shared_dir_ui.pack()
+        self.shared_dir_ui.insert(0, str(self.shared_dir))
+        Tkinter.Label(gen_cfg, text='').pack(pady=5, padx=5)
+
+        Tkinter.Button(
+            self.win,
+            text='Check Servers',
+            command=self.check_servers).pack()
+
+        zb_cfg = Tkinter.LabelFrame(self.win, text="ZBrush")
+        zb_cfg.pack(pady=15, fill="both", expand="yes")
+
+        Tkinter.Label(zb_cfg, text='ZBrush Host:').pack(pady=5, padx=5)
+        self.zbrush_host_ui = Tkinter.Entry(zb_cfg, width=30)
+        self.zbrush_host_ui.pack()
+        self.zbrush_host_ui.insert(0, self.zbrush_host)
+
+        Tkinter.Label(zb_cfg, text='ZBrush Port:').pack(pady=5, padx=5)
+        self.zbrush_port_ui = Tkinter.Entry(zb_cfg, width=30)
+        self.zbrush_port_ui.pack()
+        self.zbrush_port_ui.insert(0, self.zbrush_port)
+
+        Tkinter.Button(
+            zb_cfg,
+            text='Stop',
+            command=self.serv_stop).pack()
+
+        self.zbrush_status_ui = Tkinter.Label(
+            zb_cfg,
+            text='ZBrush Server Status: down',
+            background='red')
+        self.zbrush_status_ui.pack(pady=5, padx=5)
+
+        maya_cfg = Tkinter.LabelFrame(self.win, text="Maya")
+        maya_cfg.pack(pady=15, fill="both", expand="yes")
+
+        Tkinter.Label(maya_cfg, text='Maya Host:').pack(pady=5, padx=5)
+        self.maya_host_ui = Tkinter.Entry(maya_cfg, width=30)
+        self.maya_host_ui.insert(0, self.maya_host)
+        self.maya_host_ui.pack()
+
+        Tkinter.Label(maya_cfg, text='Maya Port:').pack(pady=5, padx=5)
+        self.maya_port_ui = Tkinter.Entry(maya_cfg, width=30)
+        self.maya_port_ui.insert(0, self.maya_port)
+        self.maya_port_ui.pack()
+
+        self.maya_status_ui = Tkinter.Label(
+            maya_cfg,
+            text='Maya Client Status: conn refused',
+            background='red')
+        self.maya_status_ui.pack(pady=5, padx=5)
+
+        Tkinter.Label(
+            self.win,
+            text=('Config will write to: %s' %
+                  utils.CONFIG_PATH)).pack(pady=5, padx=5)
+        Tkinter.Button(self.win,
+                       text='Write Config',
+                       command=self.write_config_setup).pack()
+
+    @staticmethod
+    def error_gui(message):
+        """Simple tkinter gui for displaying errors
+        """
+        tkMessageBox.showwarning('gozbruh Error:', message)
+
+if __name__ == '__main__':
+    ConfigUI()

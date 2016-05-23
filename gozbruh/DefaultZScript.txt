@@ -1,0 +1,8 @@
+//Startup
+[If, [MemGetSize, startup_mem],,
+    [MVarDef, startup_mem, 1, 0]
+    
+    //Execute Utils for setup
+    [ShellExecute, "/usr/bin/python #GOZ_COMMAND_SCRIPT start_server"]
+]
+[pd]
